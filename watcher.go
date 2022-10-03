@@ -35,14 +35,20 @@ func NewNode(name string, interval time.Duration) *Node {
 
 type Watcher struct {
 	nodes    map[uuid.UUID]*Node
-	mailConf *MailConf
+	notifier chan interface{}
 }
 
-func NewWatcher(conf *MailConf) *Watcher {
+func NewWatcher(notifier chan interface{}) *Watcher {
 	return &Watcher{
 		nodes:    make(map[uuid.UUID]*Node),
-		mailConf: conf,
+		notifier: notifier,
 	}
+}
+
+type Record struct {
+	Name     string
+	Dura     time.Duration
+	LastComm time.Time
 }
 
 type RegisterArgs struct {
@@ -96,6 +102,7 @@ func (w *Watcher) Logout(args *PingArgs, reply *Reply) error {
 	n, ok := w.nodes[args.ID]
 	if ok {
 		n.online.Store(false)
+		n.lastComm.Store(time.Now())
 		log.Printf("[INFO]client %q logout", n.name)
 	}
 	return nil
@@ -126,13 +133,10 @@ func (w *Watcher) alert(id uuid.UUID) {
 	}
 	log.Printf("[WARN]client %q is offline", n.name)
 	lastCom := n.lastComm.Load().(time.Time)
-	body := MailBody{
+	w.notifier <- &Record{
 		Name:     n.name,
 		Dura:     time.Since(lastCom),
 		LastComm: lastCom,
-	}
-	if err := sendMail(w.mailConf, &body); err != nil {
-		log.Print(err)
 	}
 }
 
