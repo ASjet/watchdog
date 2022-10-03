@@ -13,12 +13,6 @@ import (
 	"github.com/google/uuid"
 )
 
-type AlertBody struct {
-	Name     string
-	Dura     time.Duration
-	LastComm time.Time
-}
-
 type Node struct {
 	name     string
 	interval time.Duration
@@ -132,7 +126,7 @@ func (w *Watcher) alert(id uuid.UUID) {
 	}
 	log.Printf("[WARN]client %q is offline", n.name)
 	lastCom := n.lastComm.Load().(time.Time)
-	body := AlertBody{
+	body := MailBody{
 		Name:     n.name,
 		Dura:     time.Since(lastCom),
 		LastComm: lastCom,

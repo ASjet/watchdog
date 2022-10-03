@@ -4,16 +4,35 @@ import (
 	"bytes"
 	"encoding/json"
 	"html/template"
+	"log"
 	"os"
+	"time"
 
 	"gopkg.in/gomail.v2"
 )
 
-const MessageTemplate = `<h1>WATCH OUT!</h1>
-Client <b>{{.Name}}</b> has lost connection for <u>{{.Dura}}</u> since<br/>
-<i>{{.LastComm}}</i>`
+const TemplateFileName = "template.html"
 
-var msg = template.Must(template.New("msg").Parse(MessageTemplate))
+var msgTemplate *template.Template
+
+type MailBody struct {
+	Name     string
+	Dura     time.Duration
+	LastComm time.Time
+}
+
+func init() {
+	f, err := os.Open(TemplateFileName)
+	if err != nil {
+		log.Fatal(err)
+	}
+	buf := new(bytes.Buffer)
+	_, err = buf.ReadFrom(f)
+	if err != nil {
+		log.Fatal(err)
+	}
+	msgTemplate = template.Must(template.New("msg").Parse(buf.String()))
+}
 
 type MailConf struct {
 	Account    string
@@ -34,10 +53,10 @@ func ReadMailConf(file string) (*MailConf, error) {
 	return &conf, nil
 }
 
-func sendMail(conf *MailConf, body *AlertBody) error {
+func sendMail(conf *MailConf, body *MailBody) error {
 	m := gomail.NewMessage()
 	buf := new(bytes.Buffer)
-	msg.Execute(buf, body)
+	msgTemplate.Execute(buf, body)
 	m.SetHeader("From", conf.Account)
 	m.SetHeader("To", conf.PubList...)
 	m.SetHeader("Subject", "WatchDog Alert")
