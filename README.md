@@ -5,11 +5,11 @@ An online client supervisor
 
 ```json
 {
-    "Account": "noreply@example.com",
-    "Password": "password",
-    "SMTPServer": "smtp.example.com",
-    "Port": 25,
-    "PubList": [
+    "account": "noreply@example.com",
+    "password": "password",
+    "smtp_server": "smtp.example.com",
+    "port": 25,
+    "pub_list": [
         "pub@example.com"
     ]
 }
