@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 	"watchdog"
+	"watchdog/sender"
 )
 
 const CleanInterval = time.Minute * 1
@@ -16,18 +17,26 @@ func main() {
 		fmt.Printf("Usage: %s <config_file> <port>\n", os.Args[0])
 		os.Exit(0)
 	}
-	conf, err := watchdog.ReadMailConf(os.Args[1])
+	file, err := os.Open(os.Args[1])
 	if err != nil {
-		log.Fatalln(err)
+		log.Fatal(err)
 	}
 	port, err := strconv.Atoi(os.Args[2])
 	if err != nil {
-		log.Fatalln(err)
+		log.Fatal(err)
 	}
 
-	watcher := watchdog.NewWatcher(conf)
+	sender := sender.NewMailSender()
+	err = sender.Init(file)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	msq := make(chan interface{}, 10)
+	go sender.Listen(msq)
+
+	watcher := watchdog.NewWatcher(msq)
 	watcher.StartServer(port)
-	fmt.Printf("PubList: %v\n", conf.PubList)
 	for {
 		watcher.Clean(CleanInterval)
 		time.Sleep(CleanInterval)
