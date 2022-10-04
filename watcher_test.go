@@ -76,11 +76,11 @@ func (cfg *Config) logout(id uuid.UUID) {
 	if ok && n.online.Load() {
 		cfg.t.Fatalf("client %q not logout", id)
 	}
+	cfg.match()
 }
 
 func (cfg *Config) offline(id uuid.UUID) {
 	c := cfg.getClient(id)
-	go cfg.w.watch(id)
 	r := <-cfg.msq
 	wName := r.(*Record).Name
 	if c.name != wName {
@@ -137,7 +137,6 @@ func TestWatcherLogout(t *testing.T) {
 	id := cfg.register(name, interval)
 	cfg.match()
 	cfg.logout(id)
-	cfg.match()
 }
 
 func TestWatcherAlert(t *testing.T) {
