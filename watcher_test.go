@@ -2,17 +2,22 @@ package watchdog
 
 import (
 	"log"
+	"math/rand"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 )
 
+func randPort() int {
+	return 30000 + (rand.Int() % 30000)
+}
+
 type Client struct {
-	name     string
-	interval time.Duration
-	online   bool
-	deleted  bool
+	name    string
+	timeout time.Duration
+	online  bool
+	deleted bool
 }
 
 type Config struct {
@@ -36,26 +41,64 @@ func makeConfig(t *testing.T) *Config {
 func (cfg *Config) getClient(id uuid.UUID) *Client {
 	c, ok := cfg.clients[id]
 	if !ok {
-		log.Panicf("no such client %q", id)
+		log.Panicf("[%s]getClient: no such client", id)
 	}
 	return c
 }
 
-func (cfg *Config) register(name string, interval time.Duration) uuid.UUID {
+func (cfg *Config) addClient(name string, id uuid.UUID, timeout time.Duration) {
+	client := &Client{
+		name:    name,
+		timeout: timeout,
+		online:  true,
+		deleted: false,
+	}
+	cfg.clients[id] = client
+	cfg.match()
+}
+
+func (cfg *Config) offlineClient(id uuid.UUID) {
+	client := cfg.getClient(id)
+	client.online = false
+	cfg.match()
+}
+
+func (cfg *Config) delClient(id uuid.UUID) {
+	client := cfg.getClient(id)
+	client.online = false
+	client.deleted = true
+	cfg.match()
+}
+
+func (cfg *Config) runServer(clean bool, interval, bound time.Duration) int {
+	port := randPort()
+	cfg.w.StartServer(port)
+	if clean {
+		go func(interval time.Duration) {
+			for {
+				cfg.w.Clean(bound)
+				time.Sleep(interval)
+			}
+		}(interval)
+	}
+	return port
+}
+
+func (cfg *Config) register(name string, timeout time.Duration) uuid.UUID {
 	args := RegisterArgs{
-		Name:     name,
-		Interval: interval,
+		Name:    name,
+		Timeout: timeout,
 	}
 	reply := Reply{}
 	err := cfg.w.Register(&args, &reply)
 	if err != nil {
-		cfg.t.Fatal(err)
+		log.Panicf("register: %s", err)
 	}
 	client := Client{
-		name:     name,
-		interval: interval,
-		online:   true,
-		deleted:  false,
+		name:    name,
+		timeout: timeout,
+		online:  true,
+		deleted: false,
 	}
 	cfg.clients[reply.ID] = &client
 	return reply.ID
@@ -70,11 +113,11 @@ func (cfg *Config) logout(id uuid.UUID) {
 	c.online = false
 	err := cfg.w.Logout(&args, &reply)
 	if err != nil {
-		cfg.t.Fatal(err)
+		log.Panicf("logout: %s", err)
 	}
 	n, ok := cfg.w.nodes[id]
 	if ok && n.online.Load() {
-		cfg.t.Fatalf("client %q not logout", id)
+		cfg.t.Fatalf("[%s]expect offline but not", id)
 	}
 	cfg.match()
 }
@@ -84,7 +127,7 @@ func (cfg *Config) offline(id uuid.UUID) {
 	r := <-cfg.msq
 	wName := r.(*Record).Name
 	if c.name != wName {
-		cfg.t.Fatalf("expect client %q name %s, got %s", id, c.name, wName)
+		cfg.t.Fatalf("[%s]expect client name %s, got %s", id, c.name, wName)
 	}
 	c.online = false
 	cfg.match()
@@ -107,16 +150,20 @@ func (cfg *Config) match() {
 		n, ok := cfg.w.nodes[id]
 		if ok {
 			if c.deleted {
-				cfg.t.Fatalf("client %q should be deleted but not", id)
+				cfg.t.Fatalf("[%s]match(deleted): expect %v, got %v", id, c.deleted, !ok)
 			}
-			if n.name != c.name ||
-				n.interval != c.interval ||
-				n.online.Load() != c.online {
-				cfg.t.Fatalf("client %q status not equal", id)
+			if n.name != c.name {
+				cfg.t.Fatalf("[%s]match(name): expect %s, got %s", id, c.name, n.name)
+			}
+			if n.timeout != c.timeout {
+				cfg.t.Fatalf("[%s]match(timeout): expect %s, got %s", id, c.timeout, n.timeout)
+			}
+			if n.online.Load() != c.online {
+				cfg.t.Fatalf("[%s]match(online): expect %v, got %v", id, c.online, n.online.Load())
 			}
 		} else {
 			if !c.deleted {
-				cfg.t.Fatalf("client %q not exists", id)
+				cfg.t.Fatalf("[%s]match(deleted): expect %v, got %v", id, c.deleted, !ok)
 			}
 		}
 	}
@@ -124,45 +171,45 @@ func (cfg *Config) match() {
 
 func TestWatcherRegister(t *testing.T) {
 	name := "TestWatcherRegister"
-	interval := time.Second
+	timeout := time.Second
 	cfg := makeConfig(t)
-	cfg.register(name, interval)
+	cfg.register(name, timeout)
 	cfg.match()
 }
 
 func TestWatcherLogout(t *testing.T) {
 	name := "TestWatcherLogout"
-	interval := time.Second
+	timeout := time.Second
 	cfg := makeConfig(t)
-	id := cfg.register(name, interval)
+	id := cfg.register(name, timeout)
 	cfg.match()
 	cfg.logout(id)
 }
 
 func TestWatcherAlert(t *testing.T) {
 	name := "TestWatcherAlert"
-	interval := time.Second
+	timeout := time.Second
 	cfg := makeConfig(t)
-	id := cfg.register(name, interval)
+	id := cfg.register(name, timeout)
 	cfg.offline(id)
 }
 
 func TestWatcherClean(t *testing.T) {
 	name := "TestWatcherClean"
-	interval := time.Second
+	timeout := time.Second
 	cfg := makeConfig(t)
-	id := cfg.register(name, interval)
+	id := cfg.register(name, timeout)
 	cfg.offline(id)
-	cfg.w.Clean(interval)
+	cfg.w.Clean(timeout)
 	cfg.clients[id].deleted = true
 	cfg.match()
 }
 
 func TestWatcherReconnect(t *testing.T) {
 	name := "TestWatcherReconnect"
-	interval := time.Second
+	timeout := time.Second
 	cfg := makeConfig(t)
-	id := cfg.register(name, interval)
+	id := cfg.register(name, timeout)
 	cfg.offline(id)
 	cfg.online(id)
 }
