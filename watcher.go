@@ -14,18 +14,18 @@ import (
 )
 
 type Node struct {
-	name     string
-	interval time.Duration
+	name    string
+	timeout time.Duration
 
 	lastComm atomic.Value
 	online   atomic.Bool
 	watching atomic.Bool
 }
 
-func NewNode(name string, interval time.Duration) *Node {
+func NewNode(name string, timeout time.Duration) *Node {
 	n := Node{
-		name:     name,
-		interval: interval,
+		name:    name,
+		timeout: timeout,
 	}
 	n.lastComm.Store(time.Now())
 	n.online.Store(true)
@@ -52,8 +52,8 @@ type Record struct {
 }
 
 type RegisterArgs struct {
-	Name     string
-	Interval time.Duration
+	Name    string
+	Timeout time.Duration
 }
 
 type PingArgs struct {
@@ -72,38 +72,41 @@ func (w *Watcher) StartServer(port int) {
 		log.Fatal("listen error:", e)
 	}
 	go http.Serve(l, nil)
-	log.Printf("Start watcher server at port %d", port)
+	log.Printf("[Watcher]Listening on port %d", port)
 }
 
+// This is a RPC
 func (w *Watcher) Register(args *RegisterArgs, reply *Reply) error {
-	n := NewNode(args.Name, args.Interval)
+	n := NewNode(args.Name, args.Timeout)
 	id := uuid.New()
 	w.nodes[id] = n
 	go w.watch(id)
 	reply.ID = id
-	log.Printf("[INFO]new client %q online", n.name)
+	log.Printf("[Watcher]new client %q online, timeout %s", n.name, args.Timeout)
 	return nil
 }
 
+// This is a RPC
 func (w *Watcher) Ping(args *PingArgs, reply *Reply) error {
 	n, ok := w.nodes[args.ID]
 	if !ok {
-		return fmt.Errorf("Register expired")
+		return fmt.Errorf("ERR_EXPIRED")
 	}
 	n.lastComm.Store(time.Now())
 	if n.online.CompareAndSwap(false, true) {
-		log.Printf("[INFO]client %q is reconnected", n.name)
+		log.Printf("[Watcher]client %q is reconnected", n.name)
 	}
 	go w.watch(args.ID)
 	return nil
 }
 
+// This is a RPC
 func (w *Watcher) Logout(args *PingArgs, reply *Reply) error {
 	n, ok := w.nodes[args.ID]
 	if ok {
 		n.online.Store(false)
 		n.lastComm.Store(time.Now())
-		log.Printf("[INFO]client %q logout", n.name)
+		log.Printf("[Watcher]client %q logout", n.name)
 	}
 	return nil
 }
@@ -116,21 +119,17 @@ func (w *Watcher) watch(id uuid.UUID) {
 	}
 	for n.online.Load() {
 		dura := time.Since(n.lastComm.Load().(time.Time))
-		if dura > n.interval {
+		if dura > n.timeout {
 			n.online.Store(false)
-			w.alert(id)
+			go w.alert(n)
 			break
 		}
-		time.Sleep(n.interval)
+		time.Sleep(n.timeout)
 	}
 	n.watching.Store(false)
 }
 
-func (w *Watcher) alert(id uuid.UUID) {
-	n, ok := w.nodes[id]
-	if !ok {
-		return
-	}
+func (w *Watcher) alert(n *Node) {
 	log.Printf("[WARN]client %q is offline", n.name)
 	lastCom := n.lastComm.Load().(time.Time)
 	w.notifier <- &Record{
